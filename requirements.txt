@@ -2,3 +2,4 @@ numpy
 open3d
 Pillow
 PyYAML
+scipy
