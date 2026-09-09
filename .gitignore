@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Point clouds and generated maps
+*.ply
+*.pcd
+*.las
+*.laz
+*.bag
+*.db3
+*.pgm
+*.png
+*.jpg
+*.jpeg
+*.yaml
+*.yml
+
+# Keep directory structure
+!data/input/.gitkeep
+!data/output/.gitkeep
+!output/.gitkeep
