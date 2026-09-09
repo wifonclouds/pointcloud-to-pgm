@@ -21,9 +21,8 @@ def point_cloud_to_pgm(
 ) -> tuple[int, int]:
     """Project a point cloud onto the XY plane and save a grayscale PGM.
 
-    Occupied cells are black (0), while cells with no projected points are
-    unknown/gray (205). This is a projection, not a full probabilistic
-    occupancy mapping algorithm.
+    Occupied cells are black (0), while the background is white (255).
+    This is a projection, not a full probabilistic occupancy mapping algorithm.
     """
     if resolution <= 0:
         raise ValueError("resolution must be > 0")
@@ -49,7 +48,8 @@ def point_cloud_to_pgm(
     width = int(np.ceil((max_xy[0] - min_xy[0]) / resolution)) + 1
     height = int(np.ceil((max_xy[1] - min_xy[1]) / resolution)) + 1
 
-    image = np.full((height, width), 205, dtype=np.uint8)
+    # White background, black projected points.
+    image = np.full((height, width), 255, dtype=np.uint8)
 
     px = np.floor((xy[:, 0] - min_xy[0]) / resolution).astype(np.int64)
     py = np.floor((xy[:, 1] - min_xy[1]) / resolution).astype(np.int64)
