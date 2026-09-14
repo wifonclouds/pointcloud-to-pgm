@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Close small gaps in contours of an existing PGM occupancy map."""
+"""Close gaps in black contours of an existing PGM occupancy map."""
 
 from __future__ import annotations
 
@@ -11,10 +11,22 @@ from PIL import Image
 from scipy import ndimage
 
 
-def close_contours(input_path: Path, output_path: Path, radius: int = 2) -> None:
-    """Close small gaps in black contours of an existing PGM map."""
+def close_contours(
+    input_path: Path,
+    output_path: Path,
+    radius: int = 2,
+    iterations: int = 1,
+) -> None:
+    """Close contour gaps using repeated morphological closing.
+
+    A larger effective radius is useful for broken outer contours. The
+    operation is applied to the black occupied pixels and keeps the original
+    image dimensions and black/white representation.
+    """
     if radius < 1:
         raise ValueError("radius must be >= 1")
+    if iterations < 1:
+        raise ValueError("iterations must be >= 1")
 
     image = Image.open(input_path).convert("L")
     data = np.asarray(image)
@@ -22,11 +34,14 @@ def close_contours(input_path: Path, output_path: Path, radius: int = 2) -> None
     # Black pixels are occupied/contour; white pixels are background.
     occupied = data < 128
 
-    size = radius * 2 + 1
     yy, xx = np.ogrid[-radius:radius + 1, -radius:radius + 1]
     structure = (xx * xx + yy * yy) <= radius * radius
 
-    closed = ndimage.binary_closing(occupied, structure=structure)
+    # Repeated closing lets us bridge larger gaps while preserving the
+    # overall contour shape better than using one extremely large kernel.
+    closed = occupied
+    for _ in range(iterations):
+        closed = ndimage.binary_closing(closed, structure=structure)
 
     output = np.full(data.shape, 255, dtype=np.uint8)
     output[closed] = 0
@@ -34,8 +49,10 @@ def close_contours(input_path: Path, output_path: Path, radius: int = 2) -> None
     output_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(output, mode="L").save(output_path, format="PPM")
 
+    effective_radius = radius * iterations
     print(f"Saved closed contours to {output_path} ({output.shape[1]} x {output.shape[0]} px)")
-    print(f"Closing radius: {radius} px")
+    print(f"Closing radius: {radius} px x {iterations} iterations")
+    print(f"Approximate maximum gap scale: {effective_radius * 2} px")
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,12 +60,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input", type=Path, help="Input PGM map")
     parser.add_argument("output", type=Path, help="Output PGM map")
     parser.add_argument("--radius", type=int, default=2, help="Closing radius in pixels")
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="Number of closing iterations; increase for larger contour gaps",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    close_contours(args.input, args.output, radius=args.radius)
+    close_contours(
+        args.input,
+        args.output,
+        radius=args.radius,
+        iterations=args.iterations,
+    )
 
 
 if __name__ == "__main__":
