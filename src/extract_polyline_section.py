@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Extract a 3D point-cloud section around a DXF polyline.
+"""Extract a 20 cm thick planar section from a point cloud.
 
-The DXF polyline is used exactly as stored. No translation or other
-transformation is applied by this script.
+The DXF polyline defines the profile line that lies in the section plane.
+The script fits a plane to that 3D polyline and keeps ALL point-cloud
+points whose perpendicular distance to that plane is <= width / 2.
 
-For a section width of 0.20 m, the default radius is 0.10 m. A point is
-kept when its shortest 3D distance to any polyline segment is <= radius.
-This creates a 20 cm diameter tube around the polyline.
+For the default width of 0.20 m, the resulting section is a 20 cm thick
+slab, not a 20 cm tube around the polyline.
+
+The DXF polyline is used exactly as stored. No translation is applied.
 
 LAS/LAZ input is handled with laspy and keeps the original LAS point
 attributes in the output.
@@ -48,61 +50,52 @@ def load_polyline(dxf_path: Path) -> np.ndarray:
             for vertex in entity.vertices
         ]
 
-    if len(points) < 2:
-        raise ValueError("Polyline must contain at least two vertices.")
+    if len(points) < 3:
+        raise ValueError("At least three polyline vertices are required to define a section plane.")
 
-    polyline = np.asarray(points, dtype=np.float64)
+    return np.asarray(points, dtype=np.float64)
 
-    z_range = np.ptp(polyline[:, 2])
-    if z_range > 1e-4:
-        print(
-            f"Warning: polyline is not horizontal (Z range: {z_range:.6f} m). "
-            "Using the full 3D distance to its segments."
+
+def fit_section_plane(polyline: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Fit a plane to the 3D polyline using PCA.
+
+    Returns:
+        origin: point on the plane (polyline centroid)
+        normal: unit normal vector
+    """
+    origin = polyline.mean(axis=0)
+    centered = polyline - origin
+
+    _, singular_values, vh = np.linalg.svd(centered, full_matrices=False)
+
+    if singular_values[1] < 1e-10:
+        raise ValueError(
+            "Polyline is effectively a straight line, so it does not uniquely "
+            "define a section plane."
         )
 
-    return polyline
+    normal = vh[-1]
+    normal /= np.linalg.norm(normal)
+
+    return origin, normal
 
 
-def points_within_polyline_radius(
+def points_within_plane_thickness(
     points: np.ndarray,
-    polyline: np.ndarray,
-    radius: float,
-    chunk_size: int = 100_000,
+    plane_origin: np.ndarray,
+    plane_normal: np.ndarray,
+    width: float,
+    chunk_size: int = 1_000_000,
 ) -> np.ndarray:
-    """Return a boolean mask for points within 3D distance of the polyline."""
-    if radius <= 0:
-        raise ValueError("radius must be > 0")
-
-    starts = polyline[:-1]
-    ends = polyline[1:]
-    vectors = ends - starts
-    lengths_sq = np.einsum("ij,ij->i", vectors, vectors)
-
-    if np.any(lengths_sq <= 0):
-        valid_segments = lengths_sq > 0
-        starts = starts[valid_segments]
-        vectors = vectors[valid_segments]
-        lengths_sq = lengths_sq[valid_segments]
-
-    if len(starts) == 0:
-        raise ValueError("Polyline contains no non-zero-length segments.")
-
+    """Return points inside a slab of the requested thickness around a plane."""
+    half_width = width / 2.0
     mask = np.zeros(len(points), dtype=bool)
-    radius_sq = radius * radius
 
     for begin in range(0, len(points), chunk_size):
         end = min(begin + chunk_size, len(points))
         chunk = points[begin:end]
-
-        delta = chunk[:, None, :] - starts[None, :, :]
-        t = np.einsum("nsi,si->ns", delta, vectors) / lengths_sq[None, :]
-        t = np.clip(t, 0.0, 1.0)
-
-        closest = starts[None, :, :] + t[:, :, None] * vectors[None, :, :]
-        diff = chunk[:, None, :] - closest
-        distance_sq = np.einsum("nsi,nsi->ns", diff, diff)
-
-        mask[begin:end] = np.min(distance_sq, axis=1) <= radius_sq
+        signed_distance = (chunk - plane_origin) @ plane_normal
+        mask[begin:end] = np.abs(signed_distance) <= half_width
 
     return mask
 
@@ -131,16 +124,15 @@ def write_cloud(
     source_type: str,
     mask: np.ndarray,
 ) -> None:
-    """Write the selected points, preserving LAS attributes when possible."""
+    """Write selected points while preserving LAS attributes when possible."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if source_type == "las":
         if output_path.suffix.lower() not in {".las", ".laz"}:
             raise ValueError("LAS/LAZ input requires a .las or .laz output.")
 
-        selected = source.points[mask]
         output = laspy.LasData(source.header)
-        output.points = selected.copy()
+        output.points = source.points[mask].copy()
         output.write(str(output_path))
         return
 
@@ -161,14 +153,14 @@ def extract_section(
     dxf_path: Path,
     output_path: Path,
     width: float,
-    chunk_size: int = 100_000,
+    chunk_size: int = 1_000_000,
 ) -> tuple[int, int]:
-    """Extract and save the point-cloud section."""
+    """Extract and save a planar point-cloud section."""
     if width <= 0:
         raise ValueError("width must be > 0")
 
-    radius = width / 2.0
     polyline = load_polyline(dxf_path)
+    plane_origin, plane_normal = fit_section_plane(polyline)
 
     print(f"Input cloud: {input_path}")
     print(f"Polyline: {dxf_path}")
@@ -179,17 +171,25 @@ def extract_section(
         f"Y [{polyline[:, 1].min():.3f}, {polyline[:, 1].max():.3f}], "
         f"Z [{polyline[:, 2].min():.3f}, {polyline[:, 2].max():.3f}]"
     )
-    print(f"Section width: {width:.3f} m")
-    print(f"Section radius: {radius:.3f} m")
+    print(
+        "Section plane origin: "
+        f"[{plane_origin[0]:.3f}, {plane_origin[1]:.3f}, {plane_origin[2]:.3f}]"
+    )
+    print(
+        "Section plane normal: "
+        f"[{plane_normal[0]:.6f}, {plane_normal[1]:.6f}, {plane_normal[2]:.6f}]"
+    )
+    print(f"Section thickness: {width:.3f} m")
+    print(f"Section half-thickness: {width / 2.0:.3f} m")
 
     points, source, source_type = read_cloud(input_path)
-
     print(f"Input points: {len(points):,}")
 
-    mask = points_within_polyline_radius(
+    mask = points_within_plane_thickness(
         points,
-        polyline,
-        radius,
+        plane_origin,
+        plane_normal,
+        width,
         chunk_size=chunk_size,
     )
 
@@ -200,8 +200,7 @@ def extract_section(
     if selected == 0:
         raise ValueError(
             "No points were selected. Check that the DXF and point cloud "
-            "use the same coordinate system and that the polyline was "
-            "exported after the desired +Z translation."
+            "use the same coordinate system."
         )
 
     write_cloud(output_path, source, source_type, mask)
@@ -212,7 +211,7 @@ def extract_section(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="Input LAS/LAZ/PLY/PCD point cloud")
-    parser.add_argument("polyline", type=Path, help="DXF polyline")
+    parser.add_argument("polyline", type=Path, help="DXF polyline defining the section plane")
     parser.add_argument(
         "output",
         type=Path,
@@ -222,12 +221,12 @@ def parse_args() -> argparse.Namespace:
         "--width",
         type=float,
         default=0.20,
-        help="Total section width in meters (default: 0.20)",
+        help="Total section thickness in meters (default: 0.20)",
     )
     parser.add_argument(
         "--chunk-size",
         type=int,
-        default=100_000,
+        default=1_000_000,
         help="Number of cloud points processed per chunk",
     )
     return parser.parse_args()
