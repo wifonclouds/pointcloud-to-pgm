@@ -3,3 +3,4 @@ open3d
 Pillow
 PyYAML
 scipy
+ezdxf
