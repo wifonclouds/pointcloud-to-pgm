@@ -50,3 +50,15 @@ python src/cloud_to_pgm.py data/input/map.ply data/output/map.pgm --resolution 0
 ```
 
 See `python src/cloud_to_pgm.py --help` for all options.
+
+
+## Polyline section extraction
+
+Extract a point-cloud section around a DXF polyline. The DXF polyline is used exactly as exported; the script does not apply any translation. For a 20 cm-wide section, the default radius is 10 cm and the shortest 3D distance from each point to the polyline must be <= 10 cm.
+
+Usage:
+
+    pip install -r requirements.txt
+    python src/extract_polyline_section.py data/input/cloud.ply data/input/profile.dxf data/output/profile_section.ply --width 0.20
+
+If the polyline was moved by +1 m in CloudCompare, export that moved polyline to DXF and pass that DXF to the script. The script uses its stored Z coordinates and does not move it again.
