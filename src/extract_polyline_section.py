@@ -5,8 +5,8 @@ The DXF polyline defines the profile line that lies in the section plane.
 The script fits a plane to that 3D polyline and keeps ALL point-cloud
 points whose perpendicular distance to that plane is <= width / 2.
 
-For the default width of 0.20 m, the resulting section is a 20 cm thick
-slab, not a 20 cm tube around the polyline.
+For the default width of 0.20 m, the resulting section extends 20 cm
+from the profile plane in the positive plane-normal direction.
 
 The DXF polyline is used exactly as stored. No translation is applied.
 
@@ -77,6 +77,11 @@ def fit_section_plane(polyline: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     normal = vh[-1]
     normal /= np.linalg.norm(normal)
 
+    # Make the normal point upward when the fitted plane has a Z component.
+    # This removes the arbitrary sign returned by SVD.
+    if normal[2] < 0:
+        normal = -normal
+
     return origin, normal
 
 
@@ -87,15 +92,14 @@ def points_within_plane_thickness(
     width: float,
     chunk_size: int = 1_000_000,
 ) -> np.ndarray:
-    """Return points inside a slab of the requested thickness around a plane."""
-    half_width = width / 2.0
+    """Return points from the plane to one side, up to the requested thickness."""
     mask = np.zeros(len(points), dtype=bool)
 
     for begin in range(0, len(points), chunk_size):
         end = min(begin + chunk_size, len(points))
         chunk = points[begin:end]
         signed_distance = (chunk - plane_origin) @ plane_normal
-        mask[begin:end] = np.abs(signed_distance) <= half_width
+        mask[begin:end] = (signed_distance >= 0.0) & (signed_distance <= width)
 
     return mask
 
@@ -179,8 +183,7 @@ def extract_section(
         "Section plane normal: "
         f"[{plane_normal[0]:.6f}, {plane_normal[1]:.6f}, {plane_normal[2]:.6f}]"
     )
-    print(f"Section thickness: {width:.3f} m")
-    print(f"Section half-thickness: {width / 2.0:.3f} m")
+    print(f"Section thickness above profile: {width:.3f} m")
 
     points, source, source_type = read_cloud(input_path)
     print(f"Input points: {len(points):,}")
