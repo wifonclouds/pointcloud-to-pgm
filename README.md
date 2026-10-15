@@ -30,10 +30,8 @@ XY projection
    ↓
 occupancy image
    ↓
-PGM + ROS2 YAML
+PGM + ROS2 YAML metadata
 ```
-
-The project is intended to evolve toward a more robust LiDAR/SLAM occupancy-map generation pipeline with ground/obstacle classification and configurable processing parameters.
 
 ## Installation
 
@@ -43,14 +41,32 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Usage
+## Usage: automatic bounds
+
+Without reference files, the output bounds are derived from the current cloud. This mode is useful for standalone maps, but different clouds may produce different origins and dimensions.
 
 ```bash
 python src/cloud_to_pgm.py data/input/map.ply data/output/map.pgm --resolution 0.05
 ```
 
-See `python src/cloud_to_pgm.py --help` for all options.
+## Usage: align output to an existing ROS map
 
+To generate a PGM on the exact same raster grid as an existing map, pass BOTH its YAML and PGM:
+
+```bash
+python src/cloud_to_pgm.py data/input/new_cloud.ply data/output/new_map.pgm \
+  --reference-yaml data/input/map.yaml \
+  --reference-pgm data/input/map.pgm \
+  --min-height 0.1 --max-height 2.0
+```
+
+In reference mode the script reads `resolution` and `origin` from the reference YAML, and the raster width/height from the reference PGM. Each point is projected using those fixed world-coordinate bounds. Points outside the reference map extent are clipped; they do not expand the image or shift the origin. Do not pass `--padding` in this mode.
+
+**Important:** this guarantees identical grid geometry, not automatic registration of two different point clouds. The new cloud must already be in the same world/map coordinate frame as the reference map. If the cloud has a translation, rotation, or SLAM drift relative to the old map, register/transform the cloud first. Keep the original YAML as the metadata for the generated PGM because the output uses the reference grid's origin and resolution.
+
+The script writes only the PGM. It does not create or modify the YAML.
+
+See `python src/cloud_to_pgm.py --help` for all options.
 
 ## Polyline section extraction
 
